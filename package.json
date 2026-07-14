@@ -60,6 +60,7 @@
     "cross-env": "^6.0.3",
     "electron-builder": "^21.2.0",
     "electron-is-dev": "^1.1.0",
+    "electron-packager": "^17.1.2",
     "nodemon": "^1.19.3"
   }
 }
