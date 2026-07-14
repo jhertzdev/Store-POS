@@ -67,8 +67,25 @@ app.post( "/post", upload.single('imagename'), function ( req, res ) {
             image = '';
         }
     } 
-    
-  
+app.post( "/rate", function ( req, res ) {
+    settingsDB.findOne({ _id: 1 }, function ( err, docs ) {
+        if (docs && docs.settings) {
+            docs.settings.exchange_rate = req.body.exchange_rate;
+            settingsDB.update({ _id: 1 }, docs, {}, function ( err ) {
+                if ( err ) res.status( 500 ).send( err );
+                else res.send({ exchange_rate: req.body.exchange_rate });
+            });
+        } else {
+            var newSettings = { _id: 1, settings: { exchange_rate: req.body.exchange_rate } };
+            settingsDB.insert( newSettings, function ( err, s ) {
+                if ( err ) res.status( 500 ).send( err );
+                else res.send({ exchange_rate: req.body.exchange_rate });
+            });
+        }
+    });
+});
+
+
     let Settings = {  
         _id: 1,
         settings: {
@@ -82,7 +99,8 @@ app.post( "/post", upload.single('imagename'), function ( req, res ) {
             "percentage": req.body.percentage,
             "charge_tax": req.body.charge_tax,
             "footer": req.body.footer,
-            "img": image
+            "img": image,
+            "exchange_rate": req.body.exchange_rate || "1"
         }       
     }
 
@@ -106,6 +124,25 @@ app.post( "/post", upload.single('imagename'), function ( req, res ) {
 
     }
 
+});
+
+app.post( "/rate", function ( req, res ) {
+    console.log('[SETTINGS] POST /rate', req.body);
+    settingsDB.findOne({ _id: 1 }, function ( err, docs ) {
+        if (docs && docs.settings) {
+            docs.settings.exchange_rate = req.body.exchange_rate;
+            settingsDB.update({ _id: 1 }, docs, {}, function ( err ) {
+                if ( err ) res.status( 500 ).send( err );
+                else res.send({ exchange_rate: req.body.exchange_rate });
+            });
+        } else {
+            var newSettings = { _id: 1, settings: { exchange_rate: req.body.exchange_rate } };
+            settingsDB.insert( newSettings, function ( err, s ) {
+                if ( err ) res.status( 500 ).send( err );
+                else res.send({ exchange_rate: req.body.exchange_rate });
+            });
+        }
+    });
 });
 
  

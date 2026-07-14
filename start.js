@@ -3,6 +3,8 @@ const setupEvents = require('./installers/setupEvents')
     return;
  }
 
+console.log('[MAIN] Starting Electron app...');
+
 const server = require('./server');
 const {app, BrowserWindow, ipcMain, screen} = require('electron');
 const path = require('path')
@@ -12,6 +14,7 @@ const contextMenu = require('electron-context-menu');
 let mainWindow
 
 function createWindow() {
+  console.log('[MAIN] Creating window...');
   var primaryDisplay = screen.getPrimaryDisplay();
   var screenDimensions = primaryDisplay.workAreaSize;
   mainWindow = new BrowserWindow({
@@ -23,8 +26,8 @@ function createWindow() {
     
     webPreferences: {
       nodeIntegration: true,
-      enableRemoteModule: true,
-      contextIsolation: false
+      contextIsolation: false,
+      webSecurity: false
     },
   });
 
@@ -35,13 +38,20 @@ function createWindow() {
     `file://${path.join(__dirname, 'index.html')}`
   )
 
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('[MAIN] Window finished loading');
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
 }
 
 
-app.on('ready', createWindow)
+app.on('ready', () => {
+  console.log('[MAIN] App is ready');
+  createWindow();
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

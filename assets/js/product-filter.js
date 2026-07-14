@@ -80,10 +80,10 @@ $(document).ready(function(){
        $(this).addClass('active');
        if(this.id == 'check'){
             $("#cardInfo").show();
-            $("#cardInfo .input-group-addon").text("Check Info");
+            $("#cardInfo .input-group-addon").text("Info Cheque");
        }else if(this.id == 'card'){
            $("#cardInfo").show();
-           $("#cardInfo .input-group-addon").text("Card Info");
+           $("#cardInfo .input-group-addon").text("Info Tarjeta");
        }else if(this.id == 'cash'){
            $("#cardInfo").hide();
        }

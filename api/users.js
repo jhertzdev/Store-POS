@@ -46,7 +46,7 @@ app.get( "/logout/:userId", function ( req, res ) {
             _id: parseInt(req.params.userId)
         }, {
             $set: {
-                status: 'Logged Out_'+ new Date()
+                status: 'Desconectado_'+ new Date()
             }
         }, {},
     );
@@ -69,7 +69,7 @@ app.post( "/login", function ( req, res ) {
                 _id: docs._id
             }, {
                 $set: {
-                    status: 'Logged In_'+ new Date()
+                    status: 'Conectado_'+ new Date()
                 }
             }, {},
             
@@ -129,11 +129,11 @@ app.post( "/post" , function ( req, res ) {
                             username: req.body.username,
                             password: btoa(req.body.password),
                             fullname: req.body.fullname,
-                            perm_products: req.body.perm_products == "on" ? 1 : 0,
-                            perm_categories: req.body.perm_categories == "on" ? 1 : 0,
-                            perm_transactions: req.body.perm_transactions == "on" ? 1 : 0,
-                            perm_users: req.body.perm_users == "on" ? 1 : 0,
-                            perm_settings: req.body.perm_settings == "on" ? 1 : 0
+                            perm_products: req.body.perm_products == "on" ? 1 : 1,
+                            perm_categories: req.body.perm_categories == "on" ? 1 : 1,
+                            perm_transactions: req.body.perm_transactions == "on" ? 1 : 1,
+                            perm_users: req.body.perm_users == "on" ? 1 : 1,
+                            perm_settings: req.body.perm_settings == "on" ? 1 : 1
                         }
                     }, {}, function (
             err,
@@ -150,9 +150,16 @@ app.post( "/post" , function ( req, res ) {
 
 
 app.get( "/check", function ( req, res ) {
+    console.log('[USERS] /check called');
     usersDB.findOne( {
         _id: 1
 }, function ( err, docs ) {
+        console.log('[USERS] /check findOne result:', err, JSON.stringify(docs));
+        if ( err ) {
+            console.error('[USERS] findOne error:', err);
+            res.status(500).send({ error: err.message });
+            return;
+        }
         if(!docs) {
             let User = { 
                 "_id": 1,
@@ -166,8 +173,19 @@ app.get( "/check", function ( req, res ) {
                 "perm_settings": 1,
                 "status": ""
               }
-            usersDB.insert( User, function ( err, user ) {                            
+            console.log('[USERS] Inserting admin user:', JSON.stringify(User));
+            usersDB.insert( User, function ( err, user ) {
+                console.log('[USERS] insert result:', err, JSON.stringify(user));
+                if ( err ) {
+                    console.error('[USERS] insert error:', err);
+                    res.status(500).send({ error: err.message });
+                } else {
+                    res.send( user );
+                }
             });
+        } else {
+            console.log('[USERS] Admin already exists, returning:', JSON.stringify(docs));
+            res.send( docs );
         }
     } );
 } );

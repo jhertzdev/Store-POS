@@ -163,6 +163,10 @@ margin-right: 30px;
   display: none;  
 }
 
+.loading {
+  display: none;
+}
+
 #quit {
   z-index: 9999;
 }

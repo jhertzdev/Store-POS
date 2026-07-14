@@ -13,7 +13,7 @@ let holdOrder = 0;
 let vat = 0;
 let perms = null;
 let deleteId = 0;
-let paymentType = 0;
+window.paymentType = 0;
 let receipt = '';
 let totalVat = 0;
 let subTotal = 0;
@@ -22,17 +22,35 @@ let order_index = 0;
 let user_index = 0;
 let product_index = 0;
 let transaction_index;
-let host = 'localhost';
+let host = '127.0.0.1';
 let path = require('path');
 let port = '8001';
 let moment = require('moment');
 let Swal = require('sweetalert2');
 let { ipcRenderer } = require('electron');
 let dotInterval = setInterval(function () { $(".dot").text('.') }, 3000);
+
+var _electron = require('electron');
+if (!_electron.app) {
+    _electron.app = {
+        getPath: function () { return process.env.APPDATA; }
+    };
+}
 let Store = require('electron-store');
-const remote = require('electron').remote;
-const app = remote.app;
-let img_path = app.getPath('appData') + '/POS/uploads/';
+let img_path = process.env.APPDATA + '/POS/uploads/';
+
+console.log('[POS] Initializing...');
+console.log('[POS] API base URL:', 'http://' + host + ':' + port + '/api/');
+
+$(document).ready(function () {
+    console.log('[POS] DOM ready (early), hiding all spinners');
+    $(".loading").hide();
+});
+
+setTimeout(function () {
+    console.log('[POS] Failsafe: hiding all spinners after 5s');
+    $(".loading").hide();
+}, 5000);
 let api = 'http://' + host + ':' + port + '/api/';
 let btoa = require('btoa');
 let jsPDF = require('jspdf');
@@ -45,11 +63,11 @@ let customerOrderList = [];
 let ownUserEdit = null;
 let totalPrice = 0;
 let orderTotal = 0;
-let auth_error = 'Incorrect username or password';
-let auth_empty = 'Please enter a username and password';
+let auth_error = 'Usuario o contraseña incorrectos';
+let auth_empty = 'Ingrese usuario y contraseña';
 let holdOrderlocation = $("#randerHoldOrders");
 let customerOrderLocation = $("#randerCustomerOrders");
-let storage = new Store();
+let storage = new Store({ cwd: process.env.APPDATA + '/POS' });
 let settings;
 let platform;
 let user = {};
@@ -60,6 +78,19 @@ let end_date = moment(end).toDate();
 let by_till = 0;
 let by_user = 0;
 let by_status = 1;
+
+function getExchangeRate() {
+    if (settings && settings.exchange_rate) {
+        var rate = parseFloat(settings.exchange_rate);
+        return isNaN(rate) ? 1 : rate;
+    }
+    return 1;
+}
+
+function formatPrice(usdPrice) {
+    var rate = getExchangeRate();
+    return settings ? (settings.symbol + (parseFloat(usdPrice) * rate).toFixed(2)) : ('$' + parseFloat(usdPrice).toFixed(2));
+}
 
 $(function () {
 
@@ -114,12 +145,15 @@ user = storage.get('user');
 
 
 if (auth == undefined) {
-    $.get(api + 'users/check/', function (data) { });
+    console.log('[POS] No auth found, showing login');
+    console.log('[POS] Testing server connection on:', api + 'users/check/');
+    $.get(api + 'users/check/', function (data) { console.log('[POS] users/check/ response:', data); });
     $("#loading").show();
     authenticate();
 
 } else {
 
+    console.log('[POS] Auth found, loading data...');
     $('#loading').show();
 
     setTimeout(function () {
@@ -133,29 +167,71 @@ if (auth == undefined) {
         if (platform.app == 'Network Point of Sale Terminal') {
             api = 'http://' + platform.ip + ':' + port + '/api/';
             perms = true;
+            console.log('[POS] Network terminal mode, API:', api);
         }
     }
 
-    $.get(api + 'users/user/' + user._id, function (data) {
-        user = data;
-        $('#loggedin-user').text(user.fullname);
-    });
+    $.get(api + 'users/user/' + user._id)
+        .done(function (data) {
+            console.log('[POS] User data loaded:', data.fullname);
+            user = data;
+            $('#loggedin-user').text(user.fullname);
+        })
+        .fail(function (err) {
+            console.error('[POS] Failed to load user data:', err.status, err.statusText);
+        });
 
 
-    $.get(api + 'settings/get', function (data) {
-        settings = data.settings;
-    });
+    $.get(api + 'settings/get')
+        .done(function (data) {
+            console.log('[POS] Settings loaded:', data.settings.store);
+            settings = data.settings;
+            if (settings.exchange_rate) {
+                $('#tasa_cambio').val(settings.exchange_rate);
+            }
+        })
+        .fail(function (err) {
+            console.error('[POS] Failed to load settings:', err.status, err.statusText);
+        });
 
 
-    $.get(api + 'users/all', function (users) {
-        allUsers = [...users];
-    });
+    $.get(api + 'users/all')
+        .done(function (users) {
+            console.log('[POS] Users list loaded, count:', users.length);
+            allUsers = [...users];
+        })
+        .fail(function (err) {
+            console.error('[POS] Failed to load users:', err.status, err.statusText);
+        });
 
 
+
+    console.log('[POS] Checking ajaxSubmit availability:', typeof $.fn.ajaxSubmit);
+    console.log('[POS] Checking #saveProduct exists:', $('#saveProduct').length);
 
     $(document).ready(function () {
 
-        $(".loading").hide();
+        try {
+            console.log('[POS] DOM ready [main], initializing UI...');
+            console.log('[POS] Loading spinners count:', $('.loading').length);
+            $(".loading").hide();
+
+        $('#tasa_cambio').on('input', function () {
+            var rate = parseFloat($(this).val());
+            if (isNaN(rate) || rate <= 0) return;
+            if (settings) {
+                settings.exchange_rate = $(this).val();
+            }
+            $.ajax({
+                url: api + 'settings/rate',
+                type: 'POST',
+                data: JSON.stringify({ exchange_rate: $(this).val() }),
+                contentType: 'application/json; charset=utf-8',
+                processData: false
+            });
+            loadProducts();
+            $(this).renderTable(cart);
+        });
 
         loadCategories();
         loadProducts();
@@ -199,7 +275,11 @@ if (auth == undefined) {
 
         function loadProducts() {
 
-            $.get(api + 'inventory/products', function (data) {
+            console.log('[POS] Loading products...');
+            $.get(api + 'inventory/products')
+                .done(function (data) {
+
+                console.log('[POS] Products loaded, count:', data.length);
 
                 data.forEach(item => {
                     item.price = parseFloat(item.price).toFixed(2);
@@ -226,7 +306,7 @@ if (auth == undefined) {
                                         <div class="name" id="product_name">${item.name}</div> 
                                         <span class="sku">${item.sku}</span>
                                         <span class="stock">STOCK </span><span class="count">${item.stock == 1 ? item.quantity : 'N/A'}</span></div>
-                                        <sp class="text-success text-center"><b data-plugin="counterup">${settings.symbol + item.price}</b> </sp>
+                                        <sp class="text-success text-center"><b data-plugin="counterup">${formatPrice(item.price)}</b> </sp>
                             </div>
                         </div>`;
                     $('#parent').append(item_info);
@@ -241,27 +321,40 @@ if (auth == undefined) {
                     $('#categories').append(`<button type="button" id="${category}" class="btn btn-categories btn-white waves-effect waves-light">${c.length > 0 ? c[0].name : ''}</button> `);
                 });
 
+            })
+            .fail(function (err) {
+                console.error('[POS] Failed to load products:', err.status, err.statusText);
             });
 
         }
 
         function loadCategories() {
-            $.get(api + 'categories/all', function (data) {
+            console.log('[POS] Loading categories...');
+            $.get(api + 'categories/all')
+                .done(function (data) {
+                console.log('[POS] Categories loaded, count:', data.length);
                 allCategories = data;
                 loadCategoryList();
-                $('#category').html(`<option value="0">Select</option>`);
+                $('#category').html(`<option value="0">Seleccionar</option>`);
                 allCategories.forEach(category => {
                     $('#category').append(`<option value="${category._id}">${category.name}</option>`);
                 });
+            })
+            .fail(function (err) {
+                console.error('[POS] Failed to load categories:', err.status, err.statusText);
             });
         }
 
 
         function loadCustomers() {
 
-            $.get(api + 'customers/all', function (customers) {
+            console.log('[POS] Loading customers...');
+            $.get(api + 'customers/all')
+                .done(function (customers) {
 
-                $('#customer').html(`<option value="0" selected="selected">Walk in customer</option>`);
+                console.log('[POS] Customers loaded, count:', customers.length);
+
+                $('#customer').html(`<option value="0" selected="selected">Cliente genérico</option>`);
 
                 customers.forEach(cust => {
 
@@ -271,6 +364,9 @@ if (auth == undefined) {
 
                 //  $('#customer').chosen();
 
+            })
+            .fail(function (err) {
+                console.error('[POS] Failed to load customers:', err.status, err.statusText);
             });
 
         }
@@ -286,8 +382,8 @@ if (auth == undefined) {
                 }
                 else {
                     Swal.fire(
-                        'Out of stock!',
-                        'This item is currently unavailable',
+                        'Sin stock!',
+                        'Este producto no está disponible actualmente',
                         'info'
                     );
                 }
@@ -304,6 +400,7 @@ if (auth == undefined) {
         function barcodeSearch(e) {
 
             e.preventDefault();
+            console.log('[POS] Barcode search:', $("#skuCode").val());
             $("#basic-addon2").empty();
             $("#basic-addon2").append(
                 $('<i>', { class: 'fa fa-spinner fa-spin' })
@@ -322,26 +419,28 @@ if (auth == undefined) {
                 processData: false,
                 success: function (data) {
 
-                    if (data._id != undefined && data.quantity >= 1) {
-                        $(this).addProductToCart(data);
-                        $("#searchBarCode").get(0).reset();
-                        $("#basic-addon2").empty();
-                        $("#basic-addon2").append(
-                            $('<i>', { class: 'glyphicon glyphicon-ok' })
-                        )
-                    }
-                    else if (data.quantity < 1) {
-                        Swal.fire(
-                            'Out of stock!',
-                            'This item is currently unavailable',
-                            'info'
-                        );
+                    if (data._id != undefined) {
+                        var hasStock = data.stock == 0 || data.quantity > 0;
+                        if (hasStock) {
+                            $(this).addProductToCart(data);
+                            $("#searchBarCode").get(0).reset();
+                            $("#basic-addon2").empty();
+                            $("#basic-addon2").append(
+                                $('<i>', { class: 'glyphicon glyphicon-ok' })
+                            )
+                        } else {
+                            Swal.fire(
+                                'Sin stock!',
+                                'Este producto no está disponible actualmente',
+                                'info'
+                            );
+                        }
                     }
                     else {
 
                         Swal.fire(
-                            'Not Found!',
-                            '<b>' + $("#skuCode").val() + '</b> is not a valid barcode!',
+                            'No encontrado!',
+                            '<b>' + $("#skuCode").val() + '</b> no es un código válido!',
                             'warning'
                         );
 
@@ -394,16 +493,20 @@ if (auth == undefined) {
 
 
         $.fn.addProductToCart = function (data) {
+            var isFractionable = data.fractionable == 1;
             item = {
                 id: data._id,
                 product_name: data.name,
                 sku: data.sku,
                 price: data.price,
-                quantity: 1
+                quantity: isFractionable ? 0 : 1,
+                fractionable: isFractionable
             };
 
             if ($(this).isExist(item)) {
-                $(this).qtIncrement(index);
+                if (!isFractionable) {
+                    $(this).qtIncrement(index);
+                }
             } else {
                 cart.push(item);
                 $(this).renderTable(cart)
@@ -429,34 +532,38 @@ if (auth == undefined) {
 
 
         $.fn.calculateCart = function () {
-            let total = 0;
-            let grossTotal;
+            var totalUsd = 0;
+            var rate = getExchangeRate();
             $('#total').text(cart.length);
             $.each(cart, function (index, data) {
-                total += data.quantity * data.price;
+                totalUsd += data.quantity * data.price;
             });
-            total = total - $("#inputDiscount").val();
-            $('#price').text(settings.symbol + total.toFixed(2));
 
-            subTotal = total;
-
-            if ($("#inputDiscount").val() >= total) {
+            var totalBs = totalUsd * rate;
+            var discountBs = parseFloat($("#inputDiscount").val()) || 0;
+            if (discountBs > totalBs) {
                 $("#inputDiscount").val(0);
+                discountBs = 0;
             }
 
+            var afterDiscountBs = totalBs - discountBs;
+            $('#price').text(settings.symbol + afterDiscountBs.toFixed(2));
+
+            subTotal = afterDiscountBs;
+
+            var totalVatBs = 0;
             if (settings.charge_tax) {
-                totalVat = ((total * vat) / 100);
-                grossTotal = total + totalVat
+                totalVat = ((afterDiscountBs * vat) / 100);
+                var grossTotalBs = afterDiscountBs + totalVat;
+            } else {
+                totalVat = 0;
+                var grossTotalBs = afterDiscountBs;
             }
 
-            else {
-                grossTotal = total;
-            }
+            orderTotal = grossTotalBs;
 
-            orderTotal = grossTotal.toFixed(2);
-
-            $("#gross_price").text(settings.symbol + grossTotal.toFixed(2));
-            $("#payablePrice").val(grossTotal);
+            $("#gross_price").text(settings.symbol + grossTotalBs.toFixed(2));
+            $("#payablePrice").val(grossTotalBs.toFixed(2));
         };
 
 
@@ -465,37 +572,54 @@ if (auth == undefined) {
             $('#cartTable > tbody').empty();
             $(this).calculateCart();
             $.each(cartList, function (index, data) {
+                var isFractionable = data.fractionable;
+                var qtyCell;
+                if (isFractionable) {
+                    qtyCell = $('<td>').append(
+                        $('<input>', {
+                            class: 'form-control',
+                            type: 'number',
+                            step: 'any',
+                            min: '0',
+                            value: data.quantity,
+                            onChange: '$(this).qtInput(' + index + ')'
+                        })
+                    );
+                } else {
+                    qtyCell = $('<td>').append(
+                        $('<div>', { class: 'input-group' }).append(
+                            $('<div>', { class: 'input-group-btn btn-xs' }).append(
+                                $('<button>', {
+                                    class: 'btn btn-default btn-xs',
+                                    onclick: '$(this).qtDecrement(' + index + ')'
+                                }).append(
+                                    $('<i>', { class: 'fa fa-minus' })
+                                )
+                            ),
+                            $('<input>', {
+                                class: 'form-control',
+                                type: 'number',
+                                min: '1',
+                                value: data.quantity,
+                                onInput: '$(this).qtInput(' + index + ')'
+                            }),
+                            $('<div>', { class: 'input-group-btn btn-xs' }).append(
+                                $('<button>', {
+                                    class: 'btn btn-default btn-xs',
+                                    onclick: '$(this).qtIncrement(' + index + ')'
+                                }).append(
+                                    $('<i>', { class: 'fa fa-plus' })
+                                )
+                            )
+                        )
+                    );
+                }
                 $('#cartTable > tbody').append(
                     $('<tr>').append(
                         $('<td>', { text: index + 1 }),
                         $('<td>', { text: data.product_name }),
-                        $('<td>').append(
-                            $('<div>', { class: 'input-group' }).append(
-                                $('<div>', { class: 'input-group-btn btn-xs' }).append(
-                                    $('<button>', {
-                                        class: 'btn btn-default btn-xs',
-                                        onclick: '$(this).qtDecrement(' + index + ')'
-                                    }).append(
-                                        $('<i>', { class: 'fa fa-minus' })
-                                    )
-                                ),
-                                $('<input>', {
-                                    class: 'form-control',
-                                    type: 'number',
-                                    value: data.quantity,
-                                    onInput: '$(this).qtInput(' + index + ')'
-                                }),
-                                $('<div>', { class: 'input-group-btn btn-xs' }).append(
-                                    $('<button>', {
-                                        class: 'btn btn-default btn-xs',
-                                        onclick: '$(this).qtIncrement(' + index + ')'
-                                    }).append(
-                                        $('<i>', { class: 'fa fa-plus' })
-                                    )
-                                )
-                            )
-                        ),
-                        $('<td>', { text: settings.symbol + (data.price * data.quantity).toFixed(2) }),
+                        qtyCell,
+                        $('<td>', { text: formatPrice(data.price * data.quantity) }),
                         $('<td>').append(
                             $('<button>', {
                                 class: 'btn btn-danger btn-xs',
@@ -533,8 +657,8 @@ if (auth == undefined) {
 
                 else {
                     Swal.fire(
-                        'No more stock!',
-                        'You have already added all the available stock.',
+                        'Sin stock!',
+                        'Ya agregaste todo el stock disponible.',
                         'info'
                     );
                 }
@@ -558,7 +682,10 @@ if (auth == undefined) {
 
         $.fn.qtInput = function (i) {
             item = cart[i];
-            item.quantity = $(this).val();
+            var val = parseFloat($(this).val());
+            if (!isNaN(val) && val >= 0) {
+                item.quantity = val;
+            }
             $(this).renderTable(cart);
         }
 
@@ -567,13 +694,13 @@ if (auth == undefined) {
 
             if (cart.length > 0) {
                 Swal.fire({
-                    title: 'Are you sure?',
-                    text: "You are about to remove all items from the cart.",
+                    title: 'Está seguro?',
+                    text: "Va a eliminar todos los artículos del carrito.",
                     icon: 'warning',
                     showCancelButton: true,
                     confirmButtonColor: '#3085d6',
                     cancelButtonColor: '#d33',
-                    confirmButtonText: 'Yes, clear it!'
+                    confirmButtonText: 'Sí, limpiar!'
                 }).then((result) => {
 
                     if (result.value) {
@@ -583,8 +710,8 @@ if (auth == undefined) {
                         holdOrder = 0;
 
                         Swal.fire(
-                            'Cleared!',
-                            'All items have been removed.',
+                            'Limpiado!',
+                            'Todos los artículos han sido eliminados.',
                             'success'
                         )
                     }
@@ -598,11 +725,11 @@ if (auth == undefined) {
             if (cart.length != 0) {
                 $("#paymentModel").modal('toggle');
             } else {
-                Swal.fire(
-                    'Oops!',
-                    'There is nothing to pay!',
-                    'warning'
-                );
+                        Swal.fire(
+                            'Error!',
+                            'No hay nada que pagar!',
+                            'warning'
+                        );
             }
 
         });
@@ -615,8 +742,8 @@ if (auth == undefined) {
                 $("#dueModal").modal('toggle');
             } else {
                 Swal.fire(
-                    'Oops!',
-                    'There is nothing to hold!',
+                    'Error!',
+                    'No hay nada que retener!',
                     'warning'
                 );
             }
@@ -635,13 +762,14 @@ if (auth == undefined) {
 
             cart.forEach(item => {
 
-                items += "<tr><td>" + item.product_name + "</td><td>" + item.quantity + "</td><td>" + settings.symbol + parseFloat(item.price).toFixed(2) + "</td></tr>";
+                items += "<tr><td>" + item.product_name + "</td><td>" + item.quantity + "</td><td>" + formatPrice(item.price * item.quantity) + "</td></tr>";
 
             });
 
             let currentTime = new Date(moment());
 
-            let discount = $("#inputDiscount").val();
+            var discountBs = parseFloat($("#inputDiscount").val()) || 0;
+            let discount = discountBs;
             let customer = JSON.parse($("#customer").val());
             let date = moment(currentTime).format("YYYY-MM-DD HH:mm:ss");
             let paid = $("#payment").val() == "" ? "" : parseFloat($("#payment").val()).toFixed(2);
@@ -657,27 +785,27 @@ if (auth == undefined) {
                 case 1: type = "Cheque";
                     break;
 
-                case 2: type = "Card";
+                case 2: type = "Tarjeta";
                     break;
 
-                default: type = "Cash";
+                default: type = "Efectivo";
 
             }
 
 
             if (paid != "") {
                 payment = `<tr>
-                        <td>Paid</td>
+                        <td>Pagado</td>
                         <td>:</td>
                         <td>${settings.symbol + paid}</td>
                     </tr>
                     <tr>
-                        <td>Change</td>
+                        <td>Cambio</td>
                         <td>:</td>
                         <td>${settings.symbol + Math.abs(change).toFixed(2)}</td>
                     </tr>
                     <tr>
-                        <td>Method</td>
+                        <td>Método</td>
                         <td>:</td>
                         <td>${type}</td>
                     </tr>`
@@ -699,8 +827,8 @@ if (auth == undefined) {
 
                 if ($("#customer").val() == 0 && $("#refNumber").val() == "") {
                     Swal.fire(
-                        'Reference Required!',
-                        'You either need to select a customer <br> or enter a reference!',
+                        'Referencia Requerida!',
+                        'Necesita seleccionar un cliente <br> o ingresar una referencia!',
                         'warning'
                     )
 
@@ -737,9 +865,9 @@ if (auth == undefined) {
             <p>
             Order No : ${orderNumber} <br>
             Ref No : ${refNumber == "" ? orderNumber : refNumber} <br>
-            Customer : ${customer == 0 ? 'Walk in customer' : customer.name} <br>
-            Cashier : ${user.fullname} <br>
-            Date : ${date}<br>
+            Cliente : ${customer == 0 ? 'Cliente genérico' : customer.name} <br>
+            Cajero : ${user.fullname} <br>
+            Fecha : ${date}<br>
             </p>
 
         </left>
@@ -747,29 +875,29 @@ if (auth == undefined) {
         <table width="100%">
             <thead style="text-align: left;">
             <tr>
-                <th>Item</th>
-                <th>Qty</th>
-                <th>Price</th>
+                <th>Artículo</th>
+                <th>Cant</th>
+                <th>Precio</th>
             </tr>
             </thead>
             <tbody>
             ${items}                
-     
+      
             <tr>                        
-                <td><b>Subtotal</b></td>
-                <td>:</td>
-                <td><b>${settings.symbol}${subTotal.toFixed(2)}</b></td>
-            </tr>
-            <tr>
-                <td>Discount</td>
-                <td>:</td>
-                <td>${discount > 0 ? settings.symbol + parseFloat(discount).toFixed(2) : ''}</td>
-            </tr>
-            
-            ${tax_row}
-        
-            <tr>
-                <td><h3>Total</h3></td>
+                 <td><b>Subtotal</b></td>
+                 <td>:</td>
+                 <td><b>${settings.symbol}${parseFloat(subTotal).toFixed(2)}</b></td>
+             </tr>
+             <tr>
+                 <td>Descuento</td>
+                 <td>:</td>
+                 <td>${discountBs > 0 ? settings.symbol + discountBs.toFixed(2) : ''}</td>
+             </tr>
+             
+             ${tax_row}
+         
+             <tr>
+                 <td><h3>Total</h3></td>
                 <td><h3>:</h3></td>
                 <td>
                     <h3>${settings.symbol}${parseFloat(orderTotal).toFixed(2)}</h3>
@@ -778,7 +906,6 @@ if (auth == undefined) {
             ${payment == 0 ? '' : payment}
             </tbody>
             </table>
-            <br>
             <hr>
             <br>
             <p style="text-align: center;">
@@ -804,27 +931,29 @@ if (auth == undefined) {
             }
 
 
+            var rateTx = getExchangeRate();
             let data = {
                 order: orderNumber,
                 ref_number: refNumber,
-                discount: discount,
+                discount: discountBs,
                 customer: customer,
                 status: status,
                 subtotal: parseFloat(subTotal).toFixed(2),
-                tax: totalVat,
+                tax: totalVat.toFixed(2),
                 order_type: 1,
                 items: cart,
                 date: currentTime,
-                payment_type: type,
+                payment_type: paymentType,
                 payment_info: $("#paymentInfo").val(),
-                total: orderTotal,
+                total: parseFloat(orderTotal).toFixed(2),
                 paid: paid,
                 change: change,
                 _id: orderNumber,
                 till: platform.till,
                 mac: platform.mac,
                 user: user.fullname,
-                user_id: user._id
+                user_id: user._id,
+                exchange_rate: rateTx
             }
 
 
@@ -837,6 +966,7 @@ if (auth == undefined) {
                 processData: false,
                 success: function (data) {
 
+                    console.log('[POS] Transaction saved, order:', data._id || orderNumber);
                     cart = [];
                     $('#viewTransaction').html('');
                     $('#viewTransaction').html(receipt);
@@ -851,9 +981,10 @@ if (auth == undefined) {
                     $(this).renderTable(cart);
 
                 }, error: function (data) {
+                    console.error('[POS] Transaction save failed:', data.status, data.statusText);
                     $(".loading").hide();
                     $("#dueModal").modal('toggle');
-                    swal("Something went wrong!", 'Please refresh this page and try again');
+                    swal("Algo salió mal!", 'Por favor recargue la página e intente de nuevo');
 
                 }
             });
@@ -865,20 +996,28 @@ if (auth == undefined) {
         }
 
 
-        $.get(api + 'on-hold', function (data) {
+        $.get(api + 'on-hold')
+            .done(function (data) {
             holdOrderList = data;
             holdOrderlocation.empty();
             clearInterval(dotInterval);
             $(this).randerHoldOrders(holdOrderList, holdOrderlocation, 1);
+        })
+        .fail(function (err) {
+            console.error('[POS] Failed to load hold orders:', err.status, err.statusText);
         });
 
 
         $.fn.getHoldOrders = function () {
-            $.get(api + 'on-hold', function (data) {
+            $.get(api + 'on-hold')
+                .done(function (data) {
                 holdOrderList = data;
                 clearInterval(dotInterval);
                 holdOrderlocation.empty();
                 $(this).randerHoldOrders(holdOrderList, holdOrderlocation, 1);
+            })
+            .fail(function (err) {
+                console.error('[POS] Failed to get hold orders:', err.status, err.statusText);
             });
         };
 
@@ -894,14 +1033,14 @@ if (auth == undefined) {
                                     $('<b>', { text: 'Ref :' }),
                                     $('<span>', { text: order.ref_number, class: 'ref_number' }),
                                     $('<br>'),
-                                    $('<b>', { text: 'Price :' }),
+                                    $('<b>', { text: 'Precio :' }),
                                     $('<span>', { text: order.total, class: "label label-info", style: 'font-size:14px;' }),
                                     $('<br>'),
-                                    $('<b>', { text: 'Items :' }),
+                                    $('<b>', { text: 'Artículos :' }),
                                     $('<span>', { text: order.items.length }),
                                     $('<br>'),
-                                    $('<b>', { text: 'Customer :' }),
-                                    $('<span>', { text: order.customer != 0 ? order.customer.name : 'Walk in customer', class: 'customer_name' })
+                                     $('<b>', { text: 'Cliente :' }),
+                                     $('<span>', { text: order.customer != 0 ? order.customer.name : 'Cliente genérico', class: 'customer_name' })
                                 ),
                                 $('<button>', { class: 'btn btn-danger del', onclick: '$(this).deleteOrder(' + index + ',' + orderType + ')' }).append(
                                     $('<i>', { class: 'fa fa-trash' })
@@ -942,18 +1081,20 @@ if (auth == undefined) {
                 $("#customer option:selected").removeAttr('selected');
 
                 $("#customer option").filter(function () {
-                    return $(this).text() == "Walk in customer";
+                    return $(this).text() == "Cliente genérico";
                 }).prop("selected", true);
 
                 holdOrder = holdOrderList[index]._id;
                 cart = [];
                 $.each(holdOrderList[index].items, function (index, product) {
+                    var prod = allProducts.filter(function (p) { return p._id == product.id; });
                     item = {
                         id: product.id,
                         product_name: product.product_name,
                         sku: product.sku,
                         price: product.price,
-                        quantity: product.quantity
+                        quantity: product.quantity,
+                        fractionable: prod.length > 0 ? prod[0].fractionable == 1 : false
                     };
                     cart.push(item);
                 })
@@ -971,12 +1112,14 @@ if (auth == undefined) {
                 holdOrder = customerOrderList[index]._id;
                 cart = [];
                 $.each(customerOrderList[index].items, function (index, product) {
+                    var prod = allProducts.filter(function (p) { return p._id == product.id; });
                     item = {
                         id: product.id,
                         product_name: product.product_name,
                         sku: product.sku,
                         price: product.price,
-                        quantity: product.quantity
+                        quantity: product.quantity,
+                        fractionable: prod.length > 0 ? prod[0].fractionable == 1 : false
                     };
                     cart.push(item);
                 })
@@ -1000,13 +1143,13 @@ if (auth == undefined) {
             }
 
             Swal.fire({
-                title: "Delete order?",
-                text: "This will delete the order. Are you sure you want to delete!",
+                title: "Eliminar pedido?",
+                text: "Esto eliminará el pedido. Está seguro?",
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#3085d6',
                 cancelButtonColor: '#d33',
-                confirmButtonText: 'Yes, delete it!'
+                confirmButtonText: 'Sí, eliminar!'
             }).then((result) => {
 
                 if (result.value) {
@@ -1023,8 +1166,8 @@ if (auth == undefined) {
                             $(this).getCustomerOrders();
 
                             Swal.fire(
-                                'Deleted!',
-                                'You have deleted the order!',
+                                'Eliminado!',
+                                'Has eliminado el pedido!',
                                 'success'
                             )
 
@@ -1040,11 +1183,15 @@ if (auth == undefined) {
 
 
         $.fn.getCustomerOrders = function () {
-            $.get(api + 'customer-orders', function (data) {
+            $.get(api + 'customer-orders')
+                .done(function (data) {
                 clearInterval(dotInterval);
                 customerOrderList = data;
                 customerOrderLocation.empty();
                 $(this).randerHoldOrders(customerOrderList, customerOrderLocation, 2);
+            })
+            .fail(function (err) {
+                console.error('[POS] Failed to get customer orders:', err.status, err.statusText);
             });
         }
 
@@ -1071,7 +1218,7 @@ if (auth == undefined) {
                 processData: false,
                 success: function (data) {
                     $("#newCustomer").modal('hide');
-                    Swal.fire("Customer added!", "Customer added successfully!", "success");
+                    Swal.fire("Cliente agregado!", "Cliente agregado exitosamente!", "success");
                     $("#customer option:selected").removeAttr('selected');
                     $('#customer').append(
                         $('<option>', { text: custData.name, value: `{"id": ${custData._id}, "name": ${custData.name}}`, selected: 'selected' })
@@ -1081,7 +1228,7 @@ if (auth == undefined) {
 
                 }, error: function (data) {
                     $("#newCustomer").modal('hide');
-                    Swal.fire('Error', 'Something went wrong please try again', 'error')
+                    Swal.fire('Error', 'Algo salió mal, intente de nuevo', 'error')
                 }
             })
         })
@@ -1099,8 +1246,8 @@ if (auth == undefined) {
         $("#confirmPayment").on('click', function () {
             if ($('#payment').val() == "") {
                 Swal.fire(
-                    'Nope!',
-                    'Please enter the amount that was paid!',
+                    'Atención!',
+                    'Ingrese el monto que fue pagado!',
                     'warning'
                 );
             }
@@ -1146,33 +1293,55 @@ if (auth == undefined) {
 
         $('#newProductModal').click(function () {
             $('#saveProduct').get(0).reset();
+            $('#product_id').val('');
+            $('#img').val('');
+            $('#remove_img').val('');
             $('#current_img').text('');
+            $('#rmv_img').hide();
+            $('#imagename').show();
+            $('#stock').prop('checked', false);
+            $('#fractionable').prop('checked', false);
         });
 
 
         $('#saveProduct').submit(function (e) {
             e.preventDefault();
 
-            $(this).attr('action', api + 'inventory/product');
-            $(this).attr('method', 'POST');
+            console.log('[POS] Saving product... (submit handler fired)');
 
-            $(this).ajaxSubmit({
-                contentType: 'application/json',
+            var $form = $(this);
+            console.log('[POS] Form action:', api + 'inventory/product');
+            console.log('[POS] ajaxSubmit available:', typeof $form.ajaxSubmit);
+
+            $form.attr('action', api + 'inventory/product');
+            $form.attr('method', 'POST');
+
+            $form.ajaxSubmit({
+                contentType: false,
+                processData: false,
+                cache: false,
                 success: function (response) {
-
+                    console.log('[POS] Product saved successfully:', response._id);
                     $('#saveProduct').get(0).reset();
+                    $('#product_id').val('');
+                    $('#img').val('');
+                    $('#remove_img').val('');
                     $('#current_img').text('');
+                    $('#rmv_img').hide();
+                    $('#imagename').show();
+                    $('#stock').prop('checked', false);
+                    $('#fractionable').prop('checked', false);
 
                     loadProducts();
                     Swal.fire({
-                        title: 'Product Saved',
-                        text: "Select an option below to continue.",
+                        title: 'Producto Guardado',
+                        text: "Seleccione una opción para continuar.",
                         icon: 'success',
                         showCancelButton: true,
                         confirmButtonColor: '#3085d6',
                         cancelButtonColor: '#d33',
-                        confirmButtonText: 'Add another',
-                        cancelButtonText: 'Close'
+                        confirmButtonText: 'Agregar otro',
+                        cancelButtonText: 'Cerrar'
                     }).then((result) => {
 
                         if (!result.value) {
@@ -1180,7 +1349,8 @@ if (auth == undefined) {
                         }
                     });
                 }, error: function (data) {
-                    console.log(data);
+                    console.error('[POS] Product save FAILED:', data.status, data.statusText);
+                    Swal.fire('Error', 'Error al guardar el producto. Revise la consola.', 'error');
                 }
             });
 
@@ -1207,14 +1377,14 @@ if (auth == undefined) {
                     loadCategories();
                     loadProducts();
                     Swal.fire({
-                        title: 'Category Saved',
-                        text: "Select an option below to continue.",
+                        title: 'Categoría Guardada',
+                        text: "Seleccione una opción para continuar.",
                         icon: 'success',
                         showCancelButton: true,
                         confirmButtonColor: '#3085d6',
                         cancelButtonColor: '#d33',
-                        confirmButtonText: 'Add another',
-                        cancelButtonText: 'Close'
+                        confirmButtonText: 'Agregar otra',
+                        cancelButtonText: 'Cerrar'
                     }).then((result) => {
 
                         if (!result.value) {
@@ -1235,6 +1405,11 @@ if (auth == undefined) {
 
             $('#Products').modal('hide');
 
+            $('#saveProduct').get(0).reset();
+            $('#product_id').val('');
+            $('#img').val('');
+            $('#remove_img').val('');
+
             $("#category option").filter(function () {
                 return $(this).val() == allProducts[index].category;
             }).prop("selected", true);
@@ -1251,10 +1426,22 @@ if (auth == undefined) {
                 $('#imagename').hide();
                 $('#current_img').html(`<img src="${img_path + allProducts[index].img}" alt="">`);
                 $('#rmv_img').show();
+            } else {
+                $('#imagename').show();
+                $('#current_img').text('');
+                $('#rmv_img').hide();
             }
 
             if (allProducts[index].stock == 0) {
                 $('#stock').prop("checked", true);
+            } else {
+                $('#stock').prop("checked", false);
+            }
+
+            if (allProducts[index].fractionable == 1) {
+                $('#fractionable').prop("checked", true);
+            } else {
+                $('#fractionable').prop("checked", false);
             }
 
             $('#newProduct').modal('show');
@@ -1328,13 +1515,13 @@ if (auth == undefined) {
 
         $.fn.deleteProduct = function (id) {
             Swal.fire({
-                title: 'Are you sure?',
-                text: "You are about to delete this product.",
+                title: '¿Está seguro?',
+                text: "Está por eliminar este producto.",
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#3085d6',
                 cancelButtonColor: '#d33',
-                confirmButtonText: 'Yes, delete it!'
+                confirmButtonText: 'Sí, eliminar!'
             }).then((result) => {
 
                 if (result.value) {
@@ -1345,8 +1532,8 @@ if (auth == undefined) {
                         success: function (result) {
                             loadProducts();
                             Swal.fire(
-                                'Done!',
-                                'Product deleted',
+                                'Hecho!',
+                                'Producto eliminado',
                                 'success'
                             );
 
@@ -1359,13 +1546,13 @@ if (auth == undefined) {
 
         $.fn.deleteUser = function (id) {
             Swal.fire({
-                title: 'Are you sure?',
-                text: "You are about to delete this user.",
+                title: '¿Está seguro?',
+                text: "Está por eliminar este usuario.",
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#3085d6',
                 cancelButtonColor: '#d33',
-                confirmButtonText: 'Yes, delete!'
+                confirmButtonText: 'Sí, eliminar!'
             }).then((result) => {
 
                 if (result.value) {
@@ -1376,8 +1563,8 @@ if (auth == undefined) {
                         success: function (result) {
                             loadUserList();
                             Swal.fire(
-                                'Done!',
-                                'User deleted',
+                                'Hecho!',
+                                'Usuario eliminado',
                                 'success'
                             );
 
@@ -1390,13 +1577,13 @@ if (auth == undefined) {
 
         $.fn.deleteCategory = function (id) {
             Swal.fire({
-                title: 'Are you sure?',
-                text: "You are about to delete this category.",
+                title: '¿Está seguro?',
+                text: "Está por eliminar esta categoría.",
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#3085d6',
                 cancelButtonColor: '#d33',
-                confirmButtonText: 'Yes, delete it!'
+                confirmButtonText: 'Sí, eliminar!'
             }).then((result) => {
 
                 if (result.value) {
@@ -1407,8 +1594,8 @@ if (auth == undefined) {
                         success: function (result) {
                             loadCategories();
                             Swal.fire(
-                                'Done!',
-                                'Category deleted',
+                                'Hecho!',
+                                'Categoría eliminada',
                                 'success'
                             );
 
@@ -1441,9 +1628,8 @@ if (auth == undefined) {
             $('#user_list').empty();
             $('#userList').DataTable().destroy();
 
-            $.get(api + 'users/all', function (users) {
-
-
+            $.get(api + 'users/all')
+                .done(function (users) {
 
                 allUsers = [...users];
 
@@ -1456,9 +1642,9 @@ if (auth == undefined) {
                         state = user.status.split("_");
 
                         switch (state[0]) {
-                            case 'Logged In': class_name = 'btn-default';
+                            case 'Conectado': class_name = 'btn-default';
                                 break;
-                            case 'Logged Out': class_name = 'btn-light';
+                            case 'Desconectado': class_name = 'btn-light';
                                 break;
                         }
                     }
@@ -1486,6 +1672,9 @@ if (auth == undefined) {
 
                 });
 
+            })
+            .fail(function (err) {
+                console.error('[POS] Failed to load user list:', err.status, err.statusText);
             });
         }
 
@@ -1510,7 +1699,7 @@ if (auth == undefined) {
             <td><img id="`+ product._id + `"></td>
             <td><img style="max-height: 50px; max-width: 50px; border: 1px solid #ddd;" src="${product.img == "" ? "./assets/images/default.jpg" : img_path + product.img}" id="product_img"></td>
             <td>${product.name}</td>
-            <td>${settings.symbol}${product.price}</td>
+            <td>REF. ${product.price}</td>
             <td>${product.stock == 1 ? product.quantity : 'N/A'}</td>
             <td>${category.length > 0 ? category[0].name : ''}</td>
             <td class="nobr"><span class="btn-group"><button onClick="$(this).editProduct(${index})" class="btn btn-warning btn-sm"><i class="fa fa-edit"></i></button><button onClick="$(this).deleteProduct(${product._id})" class="btn btn-danger btn-sm"><i class="fa fa-trash"></i></button></span></td></tr>`;
@@ -1594,13 +1783,13 @@ if (auth == undefined) {
         $('#log-out').click(function () {
 
             Swal.fire({
-                title: 'Are you sure?',
-                text: "You are about to log out.",
+                title: '¿Está seguro?',
+                text: "Está por cerrar sesión.",
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#d33',
                 cancelButtonColor: '#3085d6',
-                confirmButtonText: 'Logout'
+                confirmButtonText: 'Cerrar Sesión'
             }).then((result) => {
 
                 if (result.value) {
@@ -1634,8 +1823,8 @@ if (auth == undefined) {
 
             if (formData.percentage != "" && !$.isNumeric(formData.percentage)) {
                 Swal.fire(
-                    'Oops!',
-                    'Please make sure the tax value is a number',
+                    'Error!',
+                    'Asegúrese que el valor del impuesto sea un número',
                     'warning'
                 );
             }
@@ -1647,13 +1836,16 @@ if (auth == undefined) {
 
 
                 $(this).ajaxSubmit({
-                    contentType: 'application/json',
+                    contentType: false,
+                    processData: false,
+                    cache: false,
                     success: function (response) {
 
+                        console.log('[POS] Settings saved successfully');
                         ipcRenderer.send('app-reload', '');
 
                     }, error: function (data) {
-                        console.log(data);
+                        console.error('[POS] Settings save FAILED:', data.status, data.statusText);
                     }
 
                 });
@@ -1670,8 +1862,8 @@ if (auth == undefined) {
 
             if (formData.till == 0 || formData.till == 1) {
                 Swal.fire(
-                    'Oops!',
-                    'Please enter a number greater than 1.',
+                    'Error!',
+                    'Ingrese un número mayor a 1.',
                     'warning'
                 );
             }
@@ -1682,11 +1874,11 @@ if (auth == undefined) {
                     ipcRenderer.send('app-reload', '');
                 }
                 else {
-                    Swal.fire(
-                        'Oops!',
-                        'Till number must be a number!',
-                        'warning'
-                    );
+                        Swal.fire(
+                            'Error!',
+                            'El número de caja debe ser un número!',
+                            'warning'
+                        );
                 }
 
             }
@@ -1705,7 +1897,7 @@ if (auth == undefined) {
                 if (formData.password != atob(user.password)) {
                     if (formData.password != formData.pass) {
                         Swal.fire(
-                            'Oops!',
+                            'Error!',
                             'Passwords do not match!',
                             'warning'
                         );
@@ -1713,13 +1905,13 @@ if (auth == undefined) {
                 }
             }
             else {
-                if (formData.password != atob(allUsers[user_index].password)) {
-                    if (formData.password != formData.pass) {
-                        Swal.fire(
-                            'Oops!',
-                            'Passwords do not match!',
-                            'warning'
-                        );
+                    if (formData.password != atob(allUsers[user_index].password)) {
+                        if (formData.password != formData.pass) {
+                            Swal.fire(
+                                'Error!',
+                                'Las contraseñas no coinciden!',
+                                'warning'
+                            );
                     }
                 }
             }
@@ -1748,7 +1940,7 @@ if (auth == undefined) {
                             $('#Users').modal('show');
                             Swal.fire(
                                 'Ok!',
-                                'User details saved!',
+                                'Datos del usuario guardados!',
                                 'success'
                             );
                         }
@@ -1861,6 +2053,10 @@ if (auth == undefined) {
 
         });
 
+        } catch (err) {
+            console.error('[POS] Error during UI initialization:', err);
+            $(".loading").hide();
+        }
 
     });
 
@@ -1940,7 +2136,10 @@ function loadTransactions() {
     let query = `by-date?start=${start_date}&end=${end_date}&user=${by_user}&status=${by_status}&till=${by_till}`;
 
 
-    $.get(api + query, function (transactions) {
+    $.get(api + query)
+    .done(function (transactions) {
+
+        console.log('[POS] Transactions loaded, count:', transactions.length);
 
         if (transactions.length > 0) {
 
@@ -1971,13 +2170,15 @@ function loadTransactions() {
                 }
 
                 counter++;
+
+                console.log('Transaction ' + index, trans)
                 transaction_list += `<tr>
                                 <td>${trans.order}</td>
                                 <td class="nobr">${moment(trans.date).format('YYYY MMM DD hh:mm:ss')}</td>
-                                <td>${settings.symbol + trans.total}</td>
+                                 <td>${settings.symbol + parseFloat(trans.total).toFixed(2)}</td>
                                 <td>${trans.paid == "" ? "" : settings.symbol + trans.paid}</td>
                                 <td>${trans.change ? settings.symbol + Math.abs(trans.change).toFixed(2) : ''}</td>
-                                <td>${trans.paid == "" ? "" : trans.payment_type == 0 ? "Cash" : 'Card'}</td>
+                                 <td>${trans.paid == "" ? "" : trans.payment_type == 0 ? 'Efectivo' : trans.payment_type == 1 ? 'Cheque' : 'Tarjeta'}</td>
                                 <td>${trans.till}</td>
                                 <td>${trans.user}</td>
                                 <td>${trans.paid == "" ? '<button class="btn btn-dark"><i class="fa fa-search-plus"></i></button>' : '<button onClick="$(this).viewTransaction(' + index + ')" class="btn btn-info"><i class="fa fa-search-plus"></i></button></td>'}</tr>
@@ -2042,12 +2243,15 @@ function loadTransactions() {
         }
         else {
             Swal.fire(
-                'No data!',
-                'No transactions available within the selected criteria',
+                'Sin datos!',
+                'No hay transacciones con los criterios seleccionados',
                 'warning'
             );
         }
 
+    })
+    .fail(function (err) {
+        console.error('[POS] Failed to load transactions:', err.status, err.statusText);
     });
 }
 
@@ -2087,8 +2291,8 @@ function loadSoldProducts() {
         sold_list += `<tr>
             <td>${item.product}</td>
             <td>${item.qty}</td>
-            <td>${product[0].stock == 1 ? product.length > 0 ? product[0].quantity : '' : 'N/A'}</td>
-            <td>${settings.symbol + (item.qty * parseFloat(item.price)).toFixed(2)}</td>
+            <td>${product.length > 0 ? (product[0].stock == 1 ? product[0].quantity : 'N/A') : 'N/A'}</td>
+            <td>${'REF. ' + (item.qty * parseFloat(item.price)).toFixed(2)}</td>
             </tr>`;
 
         if (counter == sold.length) {
@@ -2132,7 +2336,7 @@ $.fn.viewTransaction = function (index) {
     transaction_index = index;
 
     let discount = allTransactions[index].discount;
-    let customer = allTransactions[index].customer == 0 ? 'Walk in Customer' : allTransactions[index].customer.username;
+    let customer = allTransactions[index].customer == 0 ? 'Cliente genérico' : allTransactions[index].customer.username;
     let refNumber = allTransactions[index].ref_number != "" ? allTransactions[index].ref_number : allTransactions[index].order;
     let orderNumber = allTransactions[index].order;
     let type = "";
@@ -2141,34 +2345,34 @@ $.fn.viewTransaction = function (index) {
     let products = allTransactions[index].items;
 
     products.forEach(item => {
-        items += "<tr><td>" + item.product_name + "</td><td>" + item.quantity + "</td><td>" + settings.symbol + parseFloat(item.price).toFixed(2) + "</td></tr>";
+        items += "<tr><td>" + item.product_name + "</td><td>" + item.quantity + "</td><td>" + formatPrice(item.price * item.quantity) + "</td></tr>";
 
     });
 
 
     switch (allTransactions[index].payment_type) {
 
-        case 2: type = "Card";
+        case 2: type = "Tarjeta";
             break;
 
-        default: type = "Cash";
+        default: type = "Efectivo";
 
     }
 
 
     if (allTransactions[index].paid != "") {
         payment = `<tr>
-                    <td>Paid</td>
+                    <td>Pagado</td>
                     <td>:</td>
                     <td>${settings.symbol + allTransactions[index].paid}</td>
                 </tr>
                 <tr>
-                    <td>Change</td>
+                    <td>Cambio</td>
                     <td>:</td>
                     <td>${settings.symbol + Math.abs(allTransactions[index].change).toFixed(2)}</td>
                 </tr>
                 <tr>
-                    <td>Method</td>
+                    <td>Método</td>
                     <td>:</td>
                     <td>${type}</td>
                 </tr>`
@@ -2198,11 +2402,11 @@ $.fn.viewTransaction = function (index) {
     <hr>
     <left>
         <p>
-        Invoice : ${orderNumber} <br>
-        Ref No : ${refNumber} <br>
-        Customer : ${allTransactions[index].customer == 0 ? 'Walk in Customer' : allTransactions[index].customer.name} <br>
-        Cashier : ${allTransactions[index].user} <br>
-        Date : ${moment(allTransactions[index].date).format('DD MMM YYYY HH:mm:ss')}<br>
+         Factura : ${orderNumber} <br>
+         Ref No : ${refNumber} <br>
+         Cliente : ${allTransactions[index].customer == 0 ? 'Cliente genérico' : allTransactions[index].customer.name} <br>
+         Cajero : ${allTransactions[index].user} <br>
+         Fecha : ${moment(allTransactions[index].date).format('DD MMM YYYY HH:mm:ss')}<br>
         </p>
 
     </left>
@@ -2210,44 +2414,44 @@ $.fn.viewTransaction = function (index) {
     <table width="100%">
         <thead style="text-align: left;">
         <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>Price</th>
+            <th>Artículo</th>
+            <th>Cant</th>
+            <th>Precio</th>
         </tr>
         </thead>
         <tbody>
         ${items}                
  
-        <tr>                        
-            <td><b>Subtotal</b></td>
-            <td>:</td>
-            <td><b>${settings.symbol}${allTransactions[index].subtotal}</b></td>
-        </tr>
-        <tr>
-            <td>Discount</td>
-            <td>:</td>
-            <td>${discount > 0 ? settings.symbol + parseFloat(allTransactions[index].discount).toFixed(2) : ''}</td>
-        </tr>
-        
-        ${tax_row}
-    
-        <tr>
-            <td><h3>Total</h3></td>
-            <td><h3>:</h3></td>
-            <td>
-                <h3>${settings.symbol}${allTransactions[index].total}</h3>
-            </td>
-        </tr>
-        ${payment == 0 ? '' : payment}
-        </tbody>
-        </table>
-        <br>
-        <hr>
-        <br>
-        <p style="text-align: center;">
-         ${settings.footer}
-         </p>
-        </div>`;
+         <tr>                        
+             <td><b>Subtotal</b></td>
+             <td>:</td>
+             <td><b>${settings.symbol}${parseFloat(allTransactions[index].subtotal).toFixed(2)}</b></td>
+         </tr>
+         <tr>
+             <td>Descuento</td>
+             <td>:</td>
+             <td>${discount > 0 ? settings.symbol + parseFloat(allTransactions[index].discount).toFixed(2) : ''}</td>
+         </tr>
+         
+         ${tax_row}
+     
+         <tr>
+             <td><h3>Total</h3></td>
+             <td><h3>:</h3></td>
+             <td>
+                 <h3>${settings.symbol}${parseFloat(allTransactions[index].total).toFixed(2)}</h3>
+             </td>
+         </tr>
+         ${payment == 0 ? '' : payment}
+         </tbody>
+         </table>
+         <br>
+         <hr>
+         <br>
+         <p style="text-align: center;">
+          ${settings.footer}
+          </p>
+         </div>`;
 
     $('#viewTransaction').html('');
     $('#viewTransaction').html(receipt);
@@ -2290,6 +2494,7 @@ $('#reportrange').on('apply.daterangepicker', function (ev, picker) {
 
 
 function authenticate() {
+    console.log('[POS] Showing login form');
     $('#loading').append(
         `<div id="load"><form id="account"><div class="form-group"><input type="text" placeholder="Username" name="username" class="form-control"></div>
         <div class="form-group"><input type="password" placeholder="Password" name="password" class="form-control"></div>
@@ -2305,7 +2510,7 @@ $('body').on("submit", "#account", function (e) {
     if (formData.username == "" || formData.password == "") {
 
         Swal.fire(
-            'Incomplete form!',
+            'Formulario incompleto!',
             auth_empty,
             'warning'
         );
@@ -2320,6 +2525,7 @@ $('body').on("submit", "#account", function (e) {
             cache: false,
             processData: false,
             success: function (data) {
+                console.log('[POS] Login attempt result:', data._id ? 'SUCCESS user=' + data.username : 'FAILED');
                 if (data._id) {
                     storage.set('auth', { auth: true });
                     storage.set('user', data);
@@ -2327,14 +2533,14 @@ $('body').on("submit", "#account", function (e) {
                 }
                 else {
                     Swal.fire(
-                        'Oops!',
+                        'Error',
                         auth_error,
                         'warning'
                     );
                 }
 
             }, error: function (data) {
-                console.log(data);
+                console.error('[POS] Login request failed:', data.status, data.statusText);
             }
         });
     }
@@ -2343,13 +2549,13 @@ $('body').on("submit", "#account", function (e) {
 
 $('#quit').click(function () {
     Swal.fire({
-        title: 'Are you sure?',
-        text: "You are about to close the application.",
+        title: '¿Está seguro?',
+        text: "Está por cerrar la aplicación.",
         icon: 'warning',
         showCancelButton: true,
         confirmButtonColor: '#d33',
         cancelButtonColor: '#3085d6',
-        confirmButtonText: 'Close Application'
+        confirmButtonText: 'Cerrar Aplicación'
     }).then((result) => {
 
         if (result.value) {

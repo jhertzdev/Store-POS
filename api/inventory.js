@@ -93,7 +93,8 @@ app.post( "/product", upload.single('imagename'), function ( req, res ) {
         category: req.body.category,
         quantity: req.body.quantity == "" ? 0 : req.body.quantity,
         name: req.body.name,
-        stock: req.body.stock == "on" ? 0 : 1,    
+        stock: req.body.stock == "on" ? 0 : 1,
+        fractionable: req.body.fractionable == "on" ? 1 : 0,
         img: image        
     }
 
@@ -160,8 +161,8 @@ app.decrementInventory = function ( products ) {
                 callback();
             } else {
                 let updatedQuantity =
-                    parseInt( product.quantity) -
-                    parseInt( transactionProduct.quantity );
+                    parseFloat( product.quantity) -
+                    parseFloat( transactionProduct.quantity );
 
                 inventoryDB.update( {
                         _id: parseInt(product._id)
